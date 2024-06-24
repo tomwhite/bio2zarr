@@ -145,7 +145,7 @@ def assert_format_val_equal(vcf_val, zarr_val, vcf_type, vcf_number):
 
 
 def verify(vcf_path, zarr_path, show_progress=False):
-    store = zarr.DirectoryStore(zarr_path)
+    store = zarr.store.local.LocalStore(zarr_path)
 
     root = zarr.group(store=store)
     pos = root["variant_position"][:]

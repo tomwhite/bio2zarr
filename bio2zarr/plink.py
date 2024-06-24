@@ -17,7 +17,7 @@ def encode_genotypes_slice(bed_path, zarr_path, start, stop):
     # the correct approach is, but it is important to note that the
     # 0th allele is *not* necessarily the REF for these datasets.
     bed = bed_reader.open_bed(bed_path, num_threads=1, count_A1=False)
-    store = zarr.DirectoryStore(zarr_path)
+    store = zarr.store.local.LocalStore(zarr_path, mode="a")
     root = zarr.group(store=store)
     gt = core.BufferedArray(root["call_genotype"], start)
     gt_mask = core.BufferedArray(root["call_genotype_mask"], start)
@@ -73,7 +73,7 @@ def convert(
     if variants_chunk_size is None:
         variants_chunk_size = 10_000
 
-    store = zarr.DirectoryStore(zarr_path)
+    store = zarr.store.local.LocalStore(zarr_path, mode="a")
     root = zarr.group(store=store, overwrite=True)
 
     ploidy = 2
@@ -171,7 +171,7 @@ def convert(
 # FIXME do this more efficiently - currently reading the whole thing
 # in for convenience, and also comparing call-by-call
 def validate(bed_path, zarr_path):
-    store = zarr.DirectoryStore(zarr_path)
+    store = zarr.store.local.LocalStore(zarr_path)
     root = zarr.group(store=store)
     call_genotype = root["call_genotype"][:]
 

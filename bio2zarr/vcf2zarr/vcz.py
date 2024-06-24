@@ -12,6 +12,7 @@ import humanfriendly
 import numcodecs
 import numpy as np
 import zarr
+from zarr.codecs import BloscCodec, BytesCodec
 
 from .. import constants, core, provenance
 from . import icf
@@ -32,6 +33,7 @@ def inspect(path):
 
 
 DEFAULT_ZARR_COMPRESSOR = numcodecs.Blosc(cname="zstd", clevel=7)
+DEFAULT_ZARR_CODECS = [BytesCodec(), BloscCodec(cname="lz4", clevel=7)]
 
 _fixed_field_descriptions = {
     "variant_contig": "An identifier from the reference genome or an angle-bracketed ID"
@@ -385,15 +387,16 @@ class VcfZarr:
         arrays = [(core.du(self.path / a.basename), a) for _, a in self.root.arrays()]
         arrays.sort(key=lambda x: x[0])
         for stored, array in reversed(arrays):
+            nchunks = array.metadata.chunk_grid.get_nchunks(array.shape)
             d = {
                 "name": array.name,
                 "dtype": str(array.dtype),
                 "stored": core.display_size(stored),
                 "size": core.display_size(array.nbytes),
                 "ratio": core.display_number(array.nbytes / stored),
-                "nchunks": str(array.nchunks),
-                "chunk_size": core.display_size(array.nbytes / array.nchunks),
-                "avg_chunk_stored": core.display_size(int(stored / array.nchunks)),
+                "nchunks": str(nchunks),
+                "chunk_size": core.display_size(array.nbytes / nchunks),
+                "avg_chunk_stored": core.display_size(int(stored / nchunks)),
                 "shape": str(array.shape),
                 "chunk_shape": str(array.chunks),
                 "compressor": str(array.compressor),
@@ -530,7 +533,7 @@ class VcfZarrWriter:
         )
 
         self.path.mkdir()
-        store = zarr.DirectoryStore(self.path)
+        store = zarr.store.local.LocalStore(self.path, mode="a")
         root = zarr.group(store=store)
         root.attrs.update(
             {
@@ -547,13 +550,13 @@ class VcfZarrWriter:
         self.wip_path.mkdir()
         self.arrays_path.mkdir()
         self.partitions_path.mkdir()
-        store = zarr.DirectoryStore(self.arrays_path)
+        store = zarr.store.local.LocalStore(self.arrays_path, mode="a")
         root = zarr.group(store=store)
 
         total_chunks = 0
         for field in self.schema.fields:
             a = self.init_array(root, field, partitions[-1].stop)
-            total_chunks += a.nchunks
+            total_chunks += a.metadata.chunk_grid.get_nchunks(a.shape)
 
         logger.info("Writing WIP metadata")
         with open(self.wip_path / "metadata.json", "w") as f:
@@ -570,41 +573,51 @@ class VcfZarrWriter:
     def encode_samples(self, root):
         if self.schema.samples != self.icf.metadata.samples:
             raise ValueError("Subsetting or reordering samples not supported currently")
-        array = root.array(
+        data = np.array([sample.id for sample in self.schema.samples], dtype=str)
+        array = root.create_array(
             "sample_id",
-            [sample.id for sample in self.schema.samples],
-            dtype="str",
-            compressor=DEFAULT_ZARR_COMPRESSOR,
+            shape=data.shape,
+            dtype=data.dtype,
+            codecs=DEFAULT_ZARR_CODECS,
             chunks=(self.schema.samples_chunk_size,),
         )
+        array[...] = data
         array.attrs["_ARRAY_DIMENSIONS"] = ["samples"]
         logger.debug("Samples done")
 
     def encode_contig_id(self, root):
-        array = root.array(
+        data = np.array([contig.id for contig in self.schema.contigs], dtype=str)
+        array = root.create_array(
             "contig_id",
-            [contig.id for contig in self.schema.contigs],
-            dtype="str",
-            compressor=DEFAULT_ZARR_COMPRESSOR,
+            shape=data.shape,
+            dtype=data.dtype,
+            codecs=DEFAULT_ZARR_CODECS,
+            chunks=data.shape,  # no chunking
         )
         array.attrs["_ARRAY_DIMENSIONS"] = ["contigs"]
         if all(contig.length is not None for contig in self.schema.contigs):
-            array = root.array(
+            data = np.array(
+                [contig.length for contig in self.schema.contigs], dtype=np.int64
+            )
+            array = root.create_array(
                 "contig_length",
-                [contig.length for contig in self.schema.contigs],
-                dtype=np.int64,
-                compressor=DEFAULT_ZARR_COMPRESSOR,
+                shape=data.shape,
+                dtype=data.dtype,
+                compressor=DEFAULT_ZARR_CODECS,
+                chunks=data.shape,  # no chunking
             )
             array.attrs["_ARRAY_DIMENSIONS"] = ["contigs"]
 
     def encode_filter_id(self, root):
         # TODO need a way to store description also
         # https://github.com/sgkit-dev/vcf-zarr-spec/issues/19
-        array = root.array(
+        data = np.array([filt.id for filt in self.schema.filters], dtype="str")
+        array = root.create_array(
             "filter_id",
-            [filt.id for filt in self.schema.filters],
-            dtype="str",
-            compressor=DEFAULT_ZARR_COMPRESSOR,
+            shape=data.shape,
+            dtype=data.dtype,
+            codecs=DEFAULT_ZARR_CODECS,
+            chunks=data.shape,  # no chunking
         )
         array.attrs["_ARRAY_DIMENSIONS"] = ["filters"]
 
@@ -615,15 +628,16 @@ class VcfZarrWriter:
         shape = list(array_spec.shape)
         # Truncate the variants dimension is max_variant_chunks was specified
         shape[0] = variants_dim_size
-        a = root.empty(
+        a = root.create_array(  # empty raises NotImplemented
             array_spec.name,
             shape=shape,
             chunks=array_spec.chunks,
             dtype=array_spec.dtype,
-            compressor=numcodecs.get_codec(array_spec.compressor),
-            filters=[numcodecs.get_codec(filt) for filt in array_spec.filters],
-            object_codec=object_codec,
-            dimension_separator=self.metadata.dimension_separator,
+            # TODO
+            # compressor=numcodecs.get_codec(array_spec.compressor),
+            # filters=[numcodecs.get_codec(filt) for filt in array_spec.filters],
+            # object_codec=object_codec,
+            # dimension_separator=self.metadata.dimension_separator,
         )
         a.attrs.update(
             {
@@ -688,7 +702,9 @@ class VcfZarrWriter:
         # Overwrite any existing WIP files
         wip_path = self.wip_partition_array_path(partition_index, name)
         shutil.copytree(src, wip_path, dirs_exist_ok=True)
-        store = zarr.DirectoryStore(self.wip_partition_path(partition_index))
+        store = zarr.store.local.LocalStore(
+            self.wip_partition_path(partition_index), mode="a"
+        )
         wip_root = zarr.group(store=store)
         array = wip_root[name]
         logger.debug(f"Opened empty array {array.name} <{array.dtype}> @ {wip_path}")
