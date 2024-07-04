@@ -186,7 +186,7 @@ class TestSchemaEncode:
         with open(schema_path, "w") as f:
             f.write(schema.asjson())
         vcf2zarr.encode(icf_path, zarr_path, schema_path=schema_path)
-        root = zarr.open(zarr_path)
+        root = zarr.open(store=zarr_path)
         for array_spec in schema.fields:
             a = root[array_spec.name]
             assert a.compressor.cname == cname
@@ -203,7 +203,7 @@ class TestSchemaEncode:
         with open(schema_path, "w") as f:
             f.write(schema.asjson())
         vcf2zarr.encode(icf_path, zarr_path, schema_path=schema_path)
-        root = zarr.open(zarr_path)
+        root = zarr.open(store=zarr_path)
         assert root["call_genotype"].dtype == dtype
 
 

@@ -380,13 +380,14 @@ class VcfZarr:
         if not (path / ".zmetadata").exists():
             raise ValueError("Not in VcfZarr format")  # NEEDS TEST
         self.path = path
-        self.root = zarr.open(path, mode="r")
+        self.root = zarr.open(store=path, mode="r")
 
     def summary_table(self):
         data = []
         arrays = [(core.du(self.path / a.basename), a) for _, a in self.root.arrays()]
         arrays.sort(key=lambda x: x[0])
         for stored, array in reversed(arrays):
+            nbytes = array.size * array.dtype.itemsize
             nchunks = array.metadata.chunk_grid.get_nchunks(array.shape)
             d = {
                 "name": array.name,
@@ -968,7 +969,9 @@ class VcfZarrWriter:
         total_bytes = 0
         for array_spec in self.schema.fields:
             # Open the array definition to get the total size
-            total_bytes += zarr.open(self.arrays_path / array_spec.name).nbytes
+            arr = zarr.open(store=self.arrays_path / array_spec.name)
+            nbytes = arr.size * arr.dtype.itemsize
+            total_bytes += nbytes
 
         progress_config = core.ProgressConfig(
             total=total_bytes,
