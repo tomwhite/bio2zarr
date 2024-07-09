@@ -167,7 +167,7 @@ def verify(vcf_path, zarr_path, show_progress=False):
 
     format_fields = {}
     info_fields = {}
-    for colname in root.keys():
+    for colname in root.group_keys():
         if colname.startswith("call") and not colname.startswith("call_genotype"):
             vcf_name = colname.split("_", 1)[1]
             vcf_type = format_headers[vcf_name]["Type"]

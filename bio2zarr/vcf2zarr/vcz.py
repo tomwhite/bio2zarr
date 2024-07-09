@@ -15,6 +15,7 @@ import zarr
 from zarr.codecs import BloscCodec, BytesCodec
 
 from .. import constants, core, provenance
+from ..zarr_v3_utils import VLenUTF8Codec
 from . import icf
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ def inspect(path):
 
 DEFAULT_ZARR_COMPRESSOR = numcodecs.Blosc(cname="zstd", clevel=7)
 DEFAULT_ZARR_CODECS = [BytesCodec(), BloscCodec(cname="lz4", clevel=7)]
+STRING_ZARR_CODECS = [VLenUTF8Codec(), BloscCodec(cname="lz4", clevel=7)]
+
 
 _fixed_field_descriptions = {
     "variant_contig": "An identifier from the reference genome or an angle-bracketed ID"
@@ -574,12 +577,12 @@ class VcfZarrWriter:
     def encode_samples(self, root):
         if self.schema.samples != self.icf.metadata.samples:
             raise ValueError("Subsetting or reordering samples not supported currently")
-        data = np.array([sample.id for sample in self.schema.samples], dtype=str)
+        data = np.array([sample.id for sample in self.schema.samples], dtype=object)
         array = root.create_array(
             "sample_id",
             shape=data.shape,
             dtype=data.dtype,
-            codecs=DEFAULT_ZARR_CODECS,
+            codecs=STRING_ZARR_CODECS,
             chunks=(self.schema.samples_chunk_size,),
         )
         array[...] = data
@@ -587,14 +590,15 @@ class VcfZarrWriter:
         logger.debug("Samples done")
 
     def encode_contig_id(self, root):
-        data = np.array([contig.id for contig in self.schema.contigs], dtype=str)
+        data = np.array([contig.id for contig in self.schema.contigs], dtype=object)
         array = root.create_array(
             "contig_id",
             shape=data.shape,
             dtype=data.dtype,
-            codecs=DEFAULT_ZARR_CODECS,
+            codecs=STRING_ZARR_CODECS,
             chunks=data.shape,  # no chunking
         )
+        array[...] = data
         array.attrs["_ARRAY_DIMENSIONS"] = ["contigs"]
         if all(contig.length is not None for contig in self.schema.contigs):
             data = np.array(
@@ -604,9 +608,10 @@ class VcfZarrWriter:
                 "contig_length",
                 shape=data.shape,
                 dtype=data.dtype,
-                compressor=DEFAULT_ZARR_CODECS,
+                codecs=DEFAULT_ZARR_CODECS,
                 chunks=data.shape,  # no chunking
             )
+            array[...] = data
             array.attrs["_ARRAY_DIMENSIONS"] = ["contigs"]
 
     def encode_filter_id(self, root):
@@ -617,23 +622,29 @@ class VcfZarrWriter:
             "filter_id",
             shape=data.shape,
             dtype=data.dtype,
-            codecs=DEFAULT_ZARR_CODECS,
+            codecs=STRING_ZARR_CODECS,
             chunks=data.shape,  # no chunking
         )
+        array[...] = data
         array.attrs["_ARRAY_DIMENSIONS"] = ["filters"]
 
     def init_array(self, root, array_spec, variants_dim_size):
         object_codec = None
         if array_spec.dtype == "O":
             object_codec = numcodecs.VLenUTF8()
+            codecs = STRING_ZARR_CODECS
+        else:
+            codecs = DEFAULT_ZARR_CODECS
         shape = list(array_spec.shape)
         # Truncate the variants dimension is max_variant_chunks was specified
         shape[0] = variants_dim_size
+        compressor = numcodecs.get_codec(array_spec.compressor)
         a = root.create_array(  # empty raises NotImplemented
             array_spec.name,
             shape=shape,
             chunks=array_spec.chunks,
             dtype=array_spec.dtype,
+            codecs=codecs,
             # TODO
             # compressor=numcodecs.get_codec(array_spec.compressor),
             # filters=[numcodecs.get_codec(filt) for filt in array_spec.filters],
@@ -915,7 +926,7 @@ class VcfZarrWriter:
         logger.debug(f"Removing {self.wip_path}")
         shutil.rmtree(self.wip_path)
         logger.info("Consolidating Zarr metadata")
-        zarr.consolidate_metadata(self.path)
+        # zarr.consolidate_metadata(self.path)
 
     ######################
     # encode_all_partitions
