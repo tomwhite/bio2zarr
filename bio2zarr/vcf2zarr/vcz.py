@@ -12,10 +12,9 @@ import humanfriendly
 import numcodecs
 import numpy as np
 import zarr
-from zarr.codecs import BloscCodec, BytesCodec
+from zarr.codecs import BloscCodec, BytesCodec, VLenUTF8Codec
 
 from .. import constants, core, provenance
-from ..zarr_v3_utils import VLenUTF8Codec
 from . import icf
 
 logger = logging.getLogger(__name__)
