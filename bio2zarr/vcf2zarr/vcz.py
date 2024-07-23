@@ -37,6 +37,7 @@ _fixed_field_descriptions = {
     "variant_contig": "An identifier from the reference genome or an angle-bracketed ID"
     " string pointing to a contig in the assembly file",
     "variant_position": "The reference position",
+    "variant_position_end": "TODO",
     "variant_id": "List of unique identifiers where applicable",
     "variant_allele": "List of the reference and alternate alleles",
     "variant_quality": "Phred-scaled quality score",
@@ -307,6 +308,7 @@ class VcfZarrSchema(core.JsonDataclass):
             [
                 spec_from_field(name_map["QUAL"], array_name="variant_quality"),
                 spec_from_field(name_map["POS"], array_name="variant_position"),
+                spec_from_field(name_map["end"], array_name="variant_position_end"),
             ]
         )
         array_specs.extend(
