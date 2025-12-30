@@ -1148,6 +1148,7 @@ class IntermediateColumnarFormat(vcz.Source):
                 if dtype == "bool"
                 else None
             )
+            codecs = vcz.default_zarr_codecs(dtype)
             return vcz.ZarrArraySpec(
                 source=source,
                 name=name,
@@ -1155,6 +1156,7 @@ class IntermediateColumnarFormat(vcz.Source):
                 description="",
                 dimensions=dimensions,
                 compressor=compressor,
+                codecs=codecs,
             )
 
         name_map = {field.full_name: field for field in self.metadata.fields}
@@ -1212,15 +1214,18 @@ class IntermediateColumnarFormat(vcz.Source):
                     dimensions=["variants", "samples"],
                     description="",
                     compressor=vcz.DEFAULT_ZARR_COMPRESSOR_BOOL.get_config(),
+                    codecs=vcz.default_zarr_codecs("bool"),
                 )
             )
+            gt_dtype = self.gt_field.smallest_dtype()
             array_specs.append(
                 vcz.ZarrArraySpec(
                     name="call_genotype",
-                    dtype=self.gt_field.smallest_dtype(),
+                    dtype=gt_dtype,
                     dimensions=["variants", "samples", "ploidy"],
                     description="",
                     compressor=vcz.DEFAULT_ZARR_COMPRESSOR_GENOTYPES.get_config(),
+                    codecs=vcz.default_zarr_codecs(gt_dtype),
                 )
             )
             array_specs.append(
@@ -1230,6 +1235,7 @@ class IntermediateColumnarFormat(vcz.Source):
                     dimensions=["variants", "samples", "ploidy"],
                     description="",
                     compressor=vcz.DEFAULT_ZARR_COMPRESSOR_BOOL.get_config(),
+                    codecs=vcz.default_zarr_codecs("bool"),
                 )
             )
 
@@ -1588,8 +1594,7 @@ def inspect(path):
         raise ValueError(f"Path not found: {path}")
     if (path / "metadata.json").exists():
         obj = IntermediateColumnarFormat(path)
-    # NOTE: this is too strict, we should support more general Zarrs, see #276
-    elif (path / ".zmetadata").exists():
+    elif (path / ".zattrs").exists() or (path / "zarr.json").exists():
         obj = vcz.VcfZarr(path)
     else:
         raise ValueError(f"{path} not in ICF or VCF Zarr format")

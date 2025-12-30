@@ -25,6 +25,29 @@ DEFAULT_ZARR_COMPRESSOR_BOOL = numcodecs.Blosc(
     cname="zstd", clevel=7, shuffle=numcodecs.Blosc.BITSHUFFLE
 )
 
+
+def default_zarr_compressors(dtype):
+    return zarr.codecs.BloscCodec(
+        cname="zstd",
+        clevel=7,
+        shuffle=zarr.codecs.BloscShuffle.bitshuffle,
+        typesize=np.dtype(dtype).itemsize,
+    ).to_dict()
+
+
+def default_zarr_codecs(dtype):
+    if dtype == "T":
+        return [
+            zarr.codecs.VLenUTF8Codec().to_dict(),
+            default_zarr_compressors(dtype),
+        ]
+    else:
+        return [
+            zarr.codecs.BytesCodec().to_dict(),
+            default_zarr_compressors(dtype),
+        ]
+
+
 _fixed_field_descriptions = {
     "variant_contig": "An identifier from the reference genome or an angle-bracketed ID"
     " string pointing to a contig in the assembly file",
@@ -166,6 +189,7 @@ class ZarrArraySpec:
     description: str
     compressor: dict = None
     filters: list = None
+    codecs: list = None
     source: str = None
 
     def __post_init__(self):
@@ -206,6 +230,7 @@ class ZarrArraySpec:
         array_name=None,
         compressor=None,
         filters=None,
+        codecs=None,
     ):
         prefix = "variant_"
         dimensions = ["variants"]
@@ -258,6 +283,7 @@ class ZarrArraySpec:
             description=vcf_field.description,
             compressor=compressor,
             filters=filters,
+            codecs=codecs,
         )
 
     def chunk_nbytes(self, schema):
@@ -643,55 +669,73 @@ class VcfZarrWriter:
 
     def encode_samples(self, root):
         samples = self.source.samples
+        dimension_names = ["samples"]
         array = root.array(
             "sample_id",
             data=[sample.id for sample in samples],
             shape=len(samples),
-            dtype="str",
-            compressor=DEFAULT_ZARR_COMPRESSOR,
+            dtype="T",
+            # compressor=DEFAULT_ZARR_COMPRESSOR,
+            compressor="auto",  # TODO: shouldn't need to set this
+            compressors=default_zarr_compressors("T"),
             chunks=(self.schema.get_chunks(["samples"])[0],),
+            dimension_names=dimension_names,
         )
-        array.attrs["_ARRAY_DIMENSIONS"] = ["samples"]
+        # array.attrs["_ARRAY_DIMENSIONS"] = dimension_names
         logger.debug("Samples done")
 
     def encode_contigs(self, root):
         contigs = self.source.contigs
+        dimension_names = ["contigs"]
         array = root.array(
             "contig_id",
             data=[contig.id for contig in contigs],
             shape=len(contigs),
-            dtype="str",
-            compressor=DEFAULT_ZARR_COMPRESSOR,
+            dtype="T",
+            # compressor=DEFAULT_ZARR_COMPRESSOR,
+            compressor="auto",  # TODO: shouldn't need to set this
+            compressors=default_zarr_compressors("T"),
+            dimension_names=dimension_names,
         )
-        array.attrs["_ARRAY_DIMENSIONS"] = ["contigs"]
+        # array.attrs["_ARRAY_DIMENSIONS"] = dimension_names
         if all(contig.length is not None for contig in contigs):
             array = root.array(
                 "contig_length",
                 data=[contig.length for contig in contigs],
                 shape=len(contigs),
                 dtype=np.int64,
-                compressor=DEFAULT_ZARR_COMPRESSOR,
+                # compressor=DEFAULT_ZARR_COMPRESSOR,
+                compressor="auto",  # TODO: shouldn't need to set this
+                compressors=default_zarr_compressors(np.int64),
+                dimension_names=dimension_names,
             )
-            array.attrs["_ARRAY_DIMENSIONS"] = ["contigs"]
+            # array.attrs["_ARRAY_DIMENSIONS"] = dimension_names
 
     def encode_filters(self, root):
         filters = self.source.filters
+        dimension_names = ["filters"]
         array = root.array(
             "filter_id",
             data=[filt.id for filt in filters],
             shape=len(filters),
-            dtype="str",
-            compressor=DEFAULT_ZARR_COMPRESSOR,
+            dtype="T",
+            # compressor=DEFAULT_ZARR_COMPRESSOR,
+            compressor="auto",  # TODO: shouldn't need to set this
+            compressors=default_zarr_compressors("T"),
+            dimension_names=dimension_names,
         )
-        array.attrs["_ARRAY_DIMENSIONS"] = ["filters"]
+        # array.attrs["_ARRAY_DIMENSIONS"] = dimension_names
         array = root.array(
             "filter_description",
             data=[filt.description for filt in filters],
             shape=len(filters),
-            dtype="str",
-            compressor=DEFAULT_ZARR_COMPRESSOR,
+            dtype="T",
+            # compressor=DEFAULT_ZARR_COMPRESSOR,
+            compressor="auto",  # TODO: shouldn't need to set this
+            compressors=default_zarr_compressors("T"),
+            dimension_names=dimension_names,
         )
-        array.attrs["_ARRAY_DIMENSIONS"] = ["filters"]
+        # array.attrs["_ARRAY_DIMENSIONS"] = dimension_names
 
     def init_array(self, root, schema, array_spec, variants_dim_size):
         kwargs = dict(zarr_utils.ZARR_FORMAT_KWARGS)
@@ -713,6 +757,12 @@ class VcfZarrWriter:
             else:
                 kwargs["object_codec"] = numcodecs.VLenUTF8()
 
+        codecs = (
+            array_spec.codecs
+            if array_spec.codecs is not None
+            else default_zarr_codecs(array_spec.dtype)
+        )
+
         if zarr_utils.zarr_v3():
             # see https://github.com/zarr-developers/zarr-python/issues/3197
             kwargs["fill_value"] = None
@@ -727,15 +777,17 @@ class VcfZarrWriter:
             shape=shape,
             chunks=schema.get_chunks(array_spec.dimensions),
             dtype=array_spec.dtype,
-            compressor=compressor,
-            filters=filters,
+            # compressor=compressor,
+            # filters=filters,
+            codecs=codecs,
+            dimension_names=array_spec.dimensions,
             **kwargs,
         )
         a.attrs.update(
             {
                 "description": array_spec.description,
                 # Dimension names are part of the spec in Zarr v3
-                "_ARRAY_DIMENSIONS": array_spec.dimensions,
+                # "_ARRAY_DIMENSIONS": array_spec.dimensions,
             }
         )
         logger.debug(f"Initialised {a}")
@@ -980,11 +1032,18 @@ class VcfZarrWriter:
             if not src.exists():
                 # Needs test
                 raise ValueError(f"Partition {partition} of {name} does not exist")
-            dest = self.arrays_path / name
             # This is Zarr v2 specific. Chunks in v3 with start with "c" prefix.
-            chunk_files = [
-                path for path in src.iterdir() if not path.name.startswith(".")
-            ]
+            dest = self.arrays_path / name / "c"
+            dest.mkdir(exist_ok=True)
+            src_chunks = src / "c"
+            if not src_chunks.exists():
+                chunk_files = []
+            else:
+                chunk_files = [
+                    path
+                    for path in src_chunks.iterdir()
+                    if not path.name.startswith(".")
+                ]
             # TODO check for a count of then number of files. If we require a
             # dimension_separator of "/" then we could make stronger assertions
             # here, as we'd always have num_variant_chunks
@@ -1111,7 +1170,7 @@ class VcfZarrWriter:
 
 class VcfZarr:
     def __init__(self, path):
-        if not (path / ".zmetadata").exists():
+        if not (path / ".zattrs").exists() and not (path / "zarr.json").exists():
             raise ValueError("Not in VcfZarr format")  # NEEDS TEST
         self.path = path
         self.root = zarr.open(path, mode="r")
@@ -1132,8 +1191,8 @@ class VcfZarr:
                 "avg_chunk_stored": core.display_size(int(stored / array.nchunks)),
                 "shape": str(array.shape),
                 "chunk_shape": str(array.chunks),
-                "compressor": str(array.compressor),
-                "filters": str(array.filters),
+                # "compressor": str(array.compressor),
+                # "filters": str(array.filters),
             }
             data.append(d)
         return data
@@ -1195,20 +1254,22 @@ class VcfZarrIndexer:
         kwargs = {}
         if not zarr_utils.zarr_v3():
             kwargs["dimension_separator"] = "/"
+        dimension_names = [
+            "region_index_values",
+            "region_index_fields",
+        ]
         array = root.array(
             "region_index",
             data=index,
             shape=index.shape,
             chunks=index.shape,
             dtype=index.dtype,
-            compressor=numcodecs.Blosc("zstd", clevel=9, shuffle=0),
+            # compressor=numcodecs.Blosc("zstd", clevel=9, shuffle=0),
             fill_value=None,
+            dimension_names=dimension_names,
             **kwargs,
         )
-        array.attrs["_ARRAY_DIMENSIONS"] = [
-            "region_index_values",
-            "region_index_fields",
-        ]
+        # array.attrs["_ARRAY_DIMENSIONS"] = dimension_names
 
         logger.info("Consolidating Zarr metadata")
         zarr.consolidate_metadata(self.path)
