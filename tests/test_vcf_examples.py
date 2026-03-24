@@ -483,7 +483,7 @@ class TestSmallExample:
             drop_vars=["call_genotype", "call_genotype_mask", "call_genotype_phased"],
         )
         gt1 = ds["call_genotype"].values
-        gt1[1] = -1
+        gt1[1] = constants.INT_FILL
         nt.assert_array_equal(gt1, ds2["call_genotype"].values)
         m1 = ds["call_genotype_mask"].values
         m1[1] = True

@@ -485,6 +485,16 @@ def sanitise_value_int_2d(shape, value):
         return result
 
 
+def sanitise_value_int_2d_gt(shape, value):
+    if value is None:
+        return np.full(shape, constants.INT_FILL)
+    else:
+        value = sanitise_int_array(value, 2, np.int32)
+        result = np.full(shape, constants.INT_FILL, dtype=np.int32)
+        result[:, : value.shape[1]] = value
+        return result
+
+
 def sanitise_value_bool_1d(shape, value):
     if value is None:
         return np.full(shape, False, dtype=np.bool)
@@ -1071,7 +1081,7 @@ class IntermediateColumnarFormat(vcz.Source):
         for value in source_field.iter_values(start, stop):
             genotypes = value[:, :-1] if value is not None else None
             phased = value[:, -1] if value is not None else None
-            sanitised_genotypes = sanitise_value_int_2d(shape, genotypes)
+            sanitised_genotypes = sanitise_value_int_2d_gt(shape, genotypes)
             sanitised_phased = sanitise_value_bool_1d(shape[:-1], phased)
             # Force haploids to always be phased
             # https://github.com/sgkit-dev/bio2zarr/issues/399
