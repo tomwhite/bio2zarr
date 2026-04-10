@@ -810,6 +810,9 @@ class VcfZarrWriter:
         # see https://github.com/zarr-developers/zarr-python/issues/3197
         kwargs["fill_value"] = None
 
+        if array_spec.name == "call_genotype":
+            kwargs["fill_value"] = -1
+
         shape = schema.get_shape(array_spec.dimensions)
         # Truncate the variants dimension if max_variant_chunks was specified
         shape[0] = variants_dim_size
